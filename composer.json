@@ -1,6 +1,6 @@
 {
     "name": "drewlabs/mdl-cli",
-    "description": "PHP script for generating classes, interface, mixin, ect... based on UML model written iin YAML or JSON language",
+    "description": "PHP script for generating classes, interface, mixin, ect... based on UML model written in YAML or JSON language",
     "type": "library",
     "license": "MIT",
     "bin": [
