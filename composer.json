@@ -3,7 +3,9 @@
     "description": "PHP script for generating classes, interface, mixin, ect... based on UML model written iin YAML or JSON language",
     "type": "library",
     "license": "MIT",
-    "bin": ["./mdl"],
+    "bin": [
+        "./mdl"
+    ],
     "autoload": {
         "psr-4": {
             "Drewlabs\\Mdl\\": "src/"
@@ -16,6 +18,7 @@
         }
     ],
     "minimum-stability": "dev",
+    "prefer-stable": true,
     "require": {
         "drewlabs/code-generator": "dev-master"
     }
