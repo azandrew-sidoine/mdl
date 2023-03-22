@@ -1,0 +1,769 @@
+#!/usr/bin/env php
+<?php
+
+require $_composer_autoload_path ?? __DIR__ . '/vendor/autoload.php';
+
+use function Drewlabs\CodeGenerator\Proxy\PHPClassMethod;
+use function Drewlabs\CodeGenerator\Proxy\PHPClassProperty;
+use function Drewlabs\CodeGenerator\Proxy\PHPFunctionParameter;
+use function Drewlabs\CodeGenerator\Proxy\PHPInterface;
+use function Drewlabs\CodeGenerator\Proxy\PHPTrait;
+use Drewlabs\CodeGenerator\Contracts\Blueprint;
+use Drewlabs\CodeGenerator\Contracts\CallableInterface;
+use Drewlabs\CodeGenerator\Contracts\ImplementableStruct;
+use Drewlabs\CodeGenerator\Contracts\TraitableStruct;
+use Drewlabs\CodeGenerator\Contracts\OOPStructInterface;
+use Drewlabs\CodeGenerator\Contracts\ValueContainer;
+use Drewlabs\CodeGenerator\Models\PHPClass;
+use Drewlabs\CodeGenerator\Models\PHPClassMethod as ClassMethod;
+
+// #region Defaults
+const MDL_DEFAULT_HEADER = <<<EOT
+/*
+ * This file is auto generated using the drewlabs code generator package (v2.4)
+ *
+ * (c) Sidoine Azandrew <contact@liksoft.tg>
+ *
+ * For the full copyright and license information, please view the LICENSE
+ * file that was distributed with this source code.
+*/
+
+EOT;
+// #endregion Defaults
+/**
+ * Throws a runtime exception if any of the values provided in the definition fails
+ * to passe validation
+ * 
+ * @param array $rules 
+ * @param array $definition 
+ * @param array $validators 
+ * @return true 
+ * @throws RuntimeException 
+ */
+function md_validate_definition(array $rules, array $definition, array $validators = [])
+{
+    $basic_validators = array_merge([
+        'required' => function (array $values, $key) {
+            return isset($values[$key]) && null !== $values[$key];
+        },
+        'array' => function (array $values, $key) {
+            return array_key_exists($key, $values) && is_array($values[$key]);
+        },
+        'integer' => function (array $values, $key) {
+            return array_key_exists($key, $values) && is_int($values[$key]);
+        },
+        'numeric' => function (array $values, $key) {
+            return array_key_exists($key, $values) && is_numeric($values[$key]);
+        },
+        'string' => function (array $values, $key) {
+            return array_key_exists($key, $values) && is_string($values[$key]);
+        }
+    ], $validators ?? []);
+    $errors = [];
+    foreach ($rules as $key => $value) {
+        foreach ($value as $rule) {
+            if (!array_key_exists($rule, $basic_validators)) {
+                continue;
+            }
+            if (false === $basic_validators[$rule]($definition, $key)) {
+                $errors[] = "Validation rule ($rule) fails for $key";
+            }
+        }
+    }
+    return $errors;
+}
+
+// #region Command line utilities
+/**
+ * Resolve command options from command arguments
+ * 
+ * @param array $args 
+ * @return array<array-key, mixed> 
+ */
+function mdl_cmd_options(array $args)
+{
+    return array_values(array_map(function ($item) {
+        return str_replace('-', '', $item);
+    }, array_filter($args, function ($arg) {
+        return substr($arg, 0, 1) === '-' || substr($arg, 0, 2) === '--';
+    })));
+}
+
+/**
+ * Resolve command arguments from command parameters
+ * 
+ * @param array $args 
+ * @return array 
+ */
+function mdl_cmd_arguments(array $args)
+{
+    return array_values(array_filter($args, function ($arg) {
+        return substr($arg, 0, 1) !== '-' && substr($arg, 0, 2) !== '--';
+    }));
+}
+
+// #endregion Command line utilities
+
+// #region IO
+/**
+ * Recursively create directory if the later does not exists
+ * 
+ * @param string $dirname 
+ * @return void 
+ */
+function mdl_create_directory_if_not_exists(string $dirname)
+{
+    // Create the path directory if not exists
+    if (!is_dir($dirname)) {
+        mkdir($dirname, 0777, true);
+    }
+}
+
+function mdl_resolve_parent_directory_path(string $path, string $base = __DIR__)
+{
+    $substr = substr($path, 0, 3);
+    // Handle relative path
+    if (('../' === $substr) || ('..\\' === $substr)) {
+        $directory = $base;
+        $_substr = substr($path, 0, 3);
+        while (('../' === $_substr) || ('..\\' === $_substr)) {
+            $directory = dirname($directory);
+            $path = substr($path, 3);
+            $_substr = substr($path, 0, 3);
+        }
+        $path = $directory . DIRECTORY_SEPARATOR . $path;
+    }
+
+    return $path;
+}
+
+function mdl_resolve_relative_path($path, string $base = __DIR__)
+{
+    $substr = substr($path, 0, 2);
+    // Handle relative path
+    if (('./' === $substr) || ('.\\' === $substr)) {
+        $path = $base . DIRECTORY_SEPARATOR . substr($path, 2);
+    }
+    return $path;
+}
+
+function mdl_resolve_path(string $path, string $base = __DIR__)
+{
+    $substr = substr($path, 0, 3);
+    $path = ('../' === $substr) || ('..\\' === $substr) ? mdl_resolve_parent_directory_path($path, $base) : (($subsustr = substr($substr, 0, 2)) && (('./' === $subsustr) || ('.\\' === $subsustr)) ? mdl_resolve_relative_path($path, $base) : $path);
+    // If the path does not starts with '/' we append the current 
+    if ('/' !== substr($path, 0, 1)) {
+        $path = $base . DIRECTORY_SEPARATOR . $path;
+    }
+    return $path;
+}
+
+/**
+ * Creates a file writer instance
+ * 
+ * @param string $path 
+ * @param string $mode 
+ * @param bool $include_path 
+ * @param resource $context 
+ * @return object
+ * @throws RuntimeException 
+ */
+function mdl_io_create_writer(string $path, $mode = 'r', $include_path = false, $context = null)
+{
+    try {
+        $descriptor = @fopen($path, $mode, $include_path, $context);
+        clearstatcache(true, $path);
+        if (false === $descriptor) {
+            throw new \RuntimeException(sprintf('Error opening stream at path: %s. %s', $path, error_get_last()['message'] ?? ''));
+        }
+        return new class($descriptor)
+        {
+            /**
+             * @var int|resource
+             */
+            private $descriptor;
+
+            /**
+             * Creates a read writer instance.
+             *
+             * @param mixed $descriptor
+             *
+             * @return void
+             */
+            public function __construct($descriptor)
+            {
+                $this->descriptor = $descriptor;
+            }
+
+            public function __destruct()
+            {
+                $this->close();
+            }
+
+            public function write(string $data, ?int $length = null, $operation = \LOCK_EX | \LOCK_NB)
+            {
+                // Case the read writer is not a resource, we simply return false
+                if (!is_resource($this->descriptor)) {
+                    return false;
+                }
+                $bytes = false;
+                if ($this->descriptor && @flock($this->descriptor, $operation)) {
+                    $bytes = @fwrite($this->descriptor, $data, $length);
+                    @flock($this->descriptor, \LOCK_UN);
+                }
+                return $bytes;
+            }
+
+            public function close()
+            {
+                if (null !== $this->descriptor && is_resource($this->descriptor)) {
+                    fclose($this->descriptor);
+                    $this->descriptor = null;
+                }
+            }
+        };
+    } catch (\Throwable $e) {
+        throw new \RuntimeException("Error while opening file: " . $e->getMessage());
+    }
+}
+// #region IO
+
+// #region Type utilities
+/**
+ * Returns value as array
+ * 
+ * @param string|string[] $value 
+ * @return mixed[] 
+ */
+function mdl_array_wrap($value)
+{
+    return is_array($value) ? $value : [$value];
+}
+
+/**
+ * Returns a camel case version of the haystack string
+ * 
+ * @param string $haystack 
+ * @param bool $capitalize 
+ * 
+ * @return string 
+ */
+function mdl_str_camelize(string $haystack, bool $capitalize = true)
+{
+    $search_replace = static function (string $h, string $d) {
+        return str_replace($d, '', ucwords($h, $d));
+    };
+    $first_capital = static function ($param) use ($capitalize) {
+        return !$capitalize ? lcfirst($param) : $param;
+    };
+    return $first_capital($search_replace($haystack, '_'));
+}
+// #region Type utilities
+
+// #region MDL components functions
+function mdl_create_function_parameter(array $definition)
+{
+    // Validate the functiion parameter if required
+    $parameter = PHPFunctionParameter(preg_replace("/\s+/", "", $definition['name']), isset($definition['type']) ? str_replace("\\\\", "\\", $definition['type']) : null, $definition['default'] ?? null);
+
+    if (isset($definition['optional']) && (true === boolval($definition['optional']))) {
+        $parameter = $parameter->asOptional();
+    }
+
+    if (isset($definition['variadic']) && (true === boolval($definition['variadic']))) {
+        $parameter = $parameter->asVariadic();
+    }
+
+    if (isset($definition['reference']) && (true === boolval($definition['reference']))) {
+        $parameter = $parameter->asReference();
+    }
+    return $parameter;
+}
+
+function mdl_create_property(array $definition)
+{
+    // TODO : Validate property and throw exception if not valid
+    $property = PHPClassProperty(
+        preg_replace("/\s+/", "", $definition['name']),
+        isset($definition['type']) ? str_replace("\\\\", "\\", $definition['type']) : null,
+        $definition['modifier'] ?? 'public',
+        $definition['default'] ?? null,
+        $definition['comment'] ?? null
+    );
+    if (isset($definition['constant']) && (true === boolval($definition['constant']))) {
+        $property = $property->asConstant();
+    }
+    return $property;
+}
+
+function mdl_create_method(array $definition)
+{
+    // TODO: Validate method definition and throw if required
+    $method = PHPClassMethod(preg_replace("/\s+/", "", $definition['name']), [], isset($definition['returns']) ? str_replace("\\\\", "\\", $definition['returns']) : null, $definition['modifier'] ?? 'public', $definition['comment'] ?? null);
+    if (isset($definition['throws'])) {
+        /**
+         * @var ClassMethod
+         */
+        $method = $method->throws(array_map(function ($item) {
+            return str_replace("\\\\", "\\", $item);
+        }, mdl_array_wrap($definition['throws'])));
+    }
+
+    if (isset($definition['parameters'])) {
+        foreach (mdl_array_wrap($definition['parameters']) as $value) {
+            # code...
+            /**
+             * @var ClassMethod
+             */
+            $method = $method->addParameter(mdl_create_function_parameter($value));
+        }
+    }
+    if (isset($definition['static']) && (true === boolval($definition['static']))) {
+        $method = $method->asStatic(true);
+    }
+    return $method;
+}
+
+/**
+ * 
+ * @param array $definition 
+ * @return TraitableStruct 
+ */
+function mdl_create_mixin(array $definition)
+{
+    // TODO : Validate and throw if required
+    $mixin = PHPTrait(
+        preg_replace("/\s+/", "", $definition['name']),
+        array_map(function ($item) {
+            return mdl_create_method($item);
+        }, mdl_array_wrap($definition['methods'] ?? [])),
+        array_map(function ($item) {
+            return mdl_create_property($item);
+        }, mdl_array_wrap($definition['properties'] ?? []))
+    );
+    if (isset($definition['mixins'])) {
+        foreach (mdl_array_wrap($definition['mixins']) as $value) {
+            # code...
+            $mixin = $mixin->addTrait($value);
+        }
+    }
+    return $mixin;
+}
+
+/**
+ * Creates an interface
+ * 
+ * @param array $definition 
+ * @return ImplementableStruct 
+ */
+function mdl_create_interface(array $definition)
+{
+    // TODO : Validate and throw if required
+    $interface = PHPInterface(
+        preg_replace("/\s+/", "", $definition['name']),
+        array_map(function ($item) {
+            return mdl_create_method($item);
+        }, mdl_array_wrap($definition['methods'] ?? []))
+    );
+    if (isset($definition['extends'])) {
+        foreach (mdl_array_wrap($definition['extends']) as $value) {
+            $interface = $interface->setBaseInterface($value);
+        }
+    }
+    return $interface;
+}
+
+/**
+ * Property setter factory function
+ * 
+ * @param ValueContainer $property 
+ * @param string|null $type 
+ * @return CallableInterface 
+ */
+function mdl_create_property_setter(ValueContainer $property, string $type = null)
+{
+    $methodName = 'set' . mdl_str_camelize($name = $property->getName());
+    $type = str_replace("\\\\", "\\", $type);
+    $method = PHPClassMethod($methodName, [PHPFunctionParameter('value', $type)], 'self', 'public', "Set $name property value");
+    $method = $method->addLine("\$this->" . $name . " = \$value")->addLine('')->addLine("return \$this");
+    return $method;
+}
+
+/**
+ * Property getter factory function
+ * 
+ * @param ValueContainer $property 
+ * @param string|null $type 
+ * @return CallableInterface 
+ */
+function mdl_create_property_getter(ValueContainer $property, string $type = null)
+{
+    $type = str_replace("\\\\", "\\", $type);
+    $methodName = 'get' . mdl_str_camelize($name = $property->getName());
+    $method = PHPClassMethod($methodName, [], $type, 'public', "Get $name property value");
+    return $method->addLine("return \$this->" . $name);
+}
+
+/**
+ * Creates a class definition object
+ * 
+ * @param array $definition 
+ * @return Blueprint 
+ */
+function mdl_create_class(array $definition, bool $set, bool $get)
+{
+    // TODO: Add validation and throw if required
+    $setters = [];
+    $getters = [];
+    /**
+     * @var BluePrint
+     */
+    $blueprint = new PHPClass(
+        preg_replace("/\s+/", "", $definition['name']),
+        mdl_array_wrap($definition['implements'] ?? []),
+        array_map(function ($item) {
+            return mdl_create_method($item);
+        }, mdl_array_wrap($definition['methods'] ?? [])),
+        array_map(function ($item) use (&$getters, &$setters, $set, $get) {
+            $property = mdl_create_property($item);
+            // # Create setters if required
+            if ($set && (false === boolval($item['readonly'] ?? false))) {
+                $setters[] = mdl_create_property_setter($property, $item['type'] ?? null);
+            }
+            // # Create getters if required
+            if ($get) {
+                $getters[] = mdl_create_property_getter($property, $item['type'] ?? null);
+            }
+            return $property;
+        }, mdl_array_wrap($definition['properties'] ?? []))
+    );
+
+    foreach (array_merge($setters, $getters) as $value) {
+        /**
+         * @var BluePrint
+         */
+        $blueprint = $blueprint->addMethod($value);
+    }
+    if (isset($definition['mixins'])) {
+        foreach (mdl_array_wrap($definition['mixins']) as $value) {
+            # code...
+            /**
+             * @var BluePrint
+             */
+            $blueprint = $blueprint->addTrait($value);
+        }
+    }
+
+    if (isset($definition['extends'])) {
+        $blueprint = $blueprint->setBaseClass($definition['extends']);
+    }
+
+    if (isset($definition['abstract'])) {
+        $blueprint = $blueprint->asAbstract();
+    }
+
+    if (isset($definition['final'])) {
+        $blueprint = $blueprint->asFinal();
+    }
+    return $blueprint;
+}
+// #endregion MDL components functions
+
+// #region MDL miscellanous functions
+function mdl_create_sub_namespace(string $base, string $directory)
+{
+    return rtrim($base, "\\") . "\\" . implode("\\", explode('/', $directory ?? ''));
+}
+
+function mdl_create_write_directory(string $base, string $directory)
+{
+    return rtrim($base, DIRECTORY_SEPARATOR) . DIRECTORY_SEPARATOR . implode(DIRECTORY_SEPARATOR, explode('/', $directory ?? ''));
+}
+
+/**
+ * Create/Compile component source code
+ * 
+ * @param OOPStructInterface|ImplementableStruct $component 
+ * @param string $path 
+ * @param string $namespace 
+ * @param bool $strict 
+ * @param string|null $headers 
+ * @param string|null $directory 
+ * @return string[] 
+ */
+function mdl_create_component_source($component, string $path, string $namespace, string $directory = null, bool $strict = true, string $headers = null)
+{
+    return [
+        'path' => ($directory ? mdl_create_write_directory($path, $directory) : $path) . DIRECTORY_SEPARATOR . $component->getName(),
+        'source' => mdl_compile_source_code(
+            $component->addToNamespace($directory ? mdl_create_sub_namespace($namespace, $directory) : $namespace)->__toString(),
+            $strict,
+            $headers
+        )
+    ];
+}
+
+/**
+ * Compile source code
+ * 
+ * @param string $source 
+ * @param bool $strict 
+ * @param string|null $headers 
+ * @return string 
+ */
+function mdl_compile_source_code(string $source, bool $strict = true, string $headers = null)
+{
+    // #region Build source code
+    // Insert PHP script start
+    $parts[] = '<?php';
+    $parts[] = '';
+    // Add strict type definition if required
+    if ($strict) {
+        $parts[] = 'declare(strict_types=1);';
+    }
+    // Add File headers
+    $parts[] = null !== $headers ? implode(\PHP_EOL, mdl_array_wrap($headers)) : MDL_DEFAULT_HEADER;
+    // Convert the stringeable content to string
+    $parts[] = $source;
+    // #endregion build source code
+    return implode(\PHP_EOL, $parts);
+}
+
+/**
+ * Write individual component to disk
+ * 
+ * @param mixed $component 
+ * @param bool $strict
+ * @return void 
+ * @throws RuntimeException 
+ */
+function mdl_write_component_to_disk($component)
+{
+    // TODO: Validate component structure
+    $path = mdl_resolve_path($component['path'] ?? './');
+    if ('.php' !== substr($path, strlen($path) - 4)) {
+        $path = $path . '.php';
+    }
+    // TODO : Create directory if not exits
+    mdl_create_directory_if_not_exists(dirname($path));
+    mdl_io_create_writer($path, 'w')->write($component['source']);
+}
+
+function mdl_fix_class_import_paths(string $namespace, array $blueprint, array $blueprints, array $mixins, array $interfaces, $extends = null)
+{
+    if ($extends) {
+        $result = mdl_find_namespace_component($blueprints, $extends);
+        $extends = (false !== $result) && isset($result['directory']) ? (mdl_create_sub_namespace($namespace, $result['directory']) . "\\" . $result['name']) : (false === strpos($extends, "\\") ? $namespace . "\\" . $extends : $extends);
+        $blueprint['extends'] = str_replace("\\\\", "\\", $extends);
+    }
+    // Fix namespace for interfaces
+    if (isset($blueprint['implements'])) {
+        $blueprint['implements'] = array_map(function ($implement) use ($namespace, $interfaces) {
+            $result = mdl_find_namespace_component($interfaces, $implement);
+            $implement = (false !== $result) && isset($result['directory']) ? (mdl_create_sub_namespace($namespace, $result['directory']) . "\\" . $result['name']) : (false === strpos($implement, "\\") ? $namespace . "\\" . $implement : $implement);
+            return str_replace("\\\\", "\\", $implement);
+        }, $blueprint['implements'] ?? []);
+    }
+    // #endregion Fix namespace for interfaces
+
+    // Fix namespace for mixins
+    if (isset($blueprint['mixins'])) {
+        $blueprint['mixins'] = array_map(function ($mixin) use ($namespace, $mixins) {
+            $result = mdl_find_namespace_component($mixins, $mixin);
+            $mixin = (false !== $result) && isset($result['directory']) ? (mdl_create_sub_namespace($namespace, $result['directory']) . "\\" . $result['name']) : (false === strpos($mixin, "\\") ? $namespace . "\\" . $mixin : $mixin);
+            return str_replace("\\\\", "\\", $mixin);
+        }, $blueprint['mixins'] ?? []);
+    }
+    // #endregion Fix namespace for mixins
+
+    return $blueprint;
+}
+
+/**
+ * Fix mixin import namespace path
+ * 
+ * @param string $namespace 
+ * @param array $blueprint 
+ * @return array 
+ */
+function mdl_fix_trait_import_paths(string $namespace, array $blueprint, array $mixins)
+{
+    // Fix namespace for mixins
+    if (isset($blueprint['mixins'])) {
+        $blueprint['mixins'] = array_map(function ($mixin) use ($namespace, $mixins) {
+            $result = mdl_find_namespace_component($mixins, $mixin);
+            $mixin = (false !== $result) && isset($result['directory']) ? (mdl_create_sub_namespace($namespace, $result['directory']) . "\\" . $result['name']) : (false === strpos($mixin, "\\") ? $namespace . "\\" . $mixin : $mixin);
+            return str_replace("\\\\", "\\", $mixin);
+        }, $blueprint['mixins'] ?? []);
+    }
+    // #endregion Fix namespace for mixins
+    return $blueprint;
+}
+
+/**
+ * Fix interface import namespace path
+ * 
+ * @param string $namespace 
+ * @param array $blueprint 
+ * @return array 
+ */
+function mdl_fix_interface_import_paths(string $namespace, array $blueprint, array $interfaces)
+{
+    // Fix namespace for mixins
+    if (isset($blueprint['extends'])) {
+        $blueprint['extends'] = array_map(function ($iterator) use ($namespace, $interfaces) {
+            $result = mdl_find_namespace_component($interfaces, $iterator);
+            $extends = (false !== $result) && isset($result['directory']) ? (mdl_create_sub_namespace($namespace, $result['directory']) . "\\" . $result['name']) : (false === strpos($iterator, "\\") ? $namespace . "\\" . $iterator : $iterator);
+            return str_replace("\\\\", "\\", $extends);
+        }, mdl_array_wrap($blueprint['extends'] ?? []));
+    }
+    // #endregion Fix namespace for mixins
+    return $blueprint;
+}
+
+/**
+ * Return the component class path or FALSE if missing
+ * 
+ * @param array $values 
+ * @param mixed $name 
+ * @return string|false 
+ */
+function mdl_find_namespace_component(array $values, $name)
+{
+    foreach ($values as $value) {
+        $directory = $value['directory'] ?? null;
+        $local_name = isset($value['name']) ? preg_replace("/\s+/", "", $value['name']) : null;
+        if (null === $local_name) {
+            continue;
+        }
+        if (trim($directory ? mdl_create_sub_namespace('', $directory) . "\\" . $local_name : $local_name, '\\') === trim($name, '\\')) {
+            return $value;
+        }
+    }
+    return false;
+}
+// #region MDL miscellanous functions
+
+// #region MDL namespace
+/**
+ * 
+ * @param array $definition 
+ * @param bool $strict 
+ * @return void 
+ * @throws RuntimeException 
+ */
+function mdl_create_namespace(array $definition, bool $strict = true, bool $setters = false, bool $getters = false)
+{
+    $path = $definition['path'] ?? './src';
+    $namespace = preg_replace("/\s+/", "", str_replace("\\\\", "\\", $definition['name'] ?? 'App'));
+    // TODO : Add interface method to class if interface is in namespace
+    $blueprint_definitions = $definition['classes'] ?? [];
+    $interfaces = $definition['interfaces'] ?? [];
+    $mixin_definitions = $definition['mixins'] ?? [];
+
+    $blueprints = array_map(function ($blueprint) use ($interfaces, $blueprint_definitions, $mixin_definitions, $namespace) {
+        // #region Rewrite extended class path
+        $extends = isset($blueprint['extends']) ? (is_array($blueprint['extends']) ? array_values($blueprint['extends'])[0] : $blueprint['extends']) : null;
+        // #endregion Rewrite extended class path
+        if ($blueprint['abstract'] ?? false) {
+            return mdl_fix_class_import_paths(
+                $namespace,
+                $blueprint,
+                $blueprint_definitions,
+                $mixin_definitions,
+                $interfaces,
+                $extends
+            );
+        }
+        $methods = [];
+        // #region Merge the extended class implementation with the current class implementations
+        $current_implementations = mdl_array_wrap($blueprint['implements'] ?? []);
+        $iterable = $extends && ($extend_definition = mdl_find_namespace_component($blueprint_definitions, $extends)) ? array_merge($extend_definition['implements'] ?? [], $current_implementations) : $current_implementations;
+        // #endregion Merge the extended class implementation with the current class implementations
+        foreach ($iterable as $value) {
+            if (false === strpos($value ?? '', '\\') && (false !== ($match = mdl_find_namespace_component($interfaces, $value)))) {
+                $methods = array_merge($methods, $match['methods'] ?? []);
+            }
+        }
+
+        $blueprint['methods'] = array_merge($blueprint['methods'] ?? [], $methods);
+        return mdl_fix_class_import_paths(
+            $namespace,
+            $blueprint,
+            $blueprint_definitions,
+            $mixin_definitions,
+            $interfaces,
+            $extends
+        );;
+    }, $blueprint_definitions);
+
+    $mixins = isset($definition['mixins']) ? array_map(function ($mixin) use ($path, $namespace, $strict) {
+        // TODO : Validate the component
+        return mdl_create_component_source(mdl_create_mixin($mixin), $path, $namespace, $mixin['directory'] ?? null, $strict);
+    }, array_map(function ($mixin) use ($namespace, $mixin_definitions) {
+        return mdl_fix_trait_import_paths($namespace, $mixin, $mixin_definitions);
+    }, $mixin_definitions)) : [];
+
+    printf("\nCompiling component, please wait...\n");
+
+    $implementations = $definition['interfaces'] ? array_map(function ($interface) use ($path, $namespace, $strict) {
+        // TODO : Validate the component
+        return mdl_create_component_source(mdl_create_interface($interface), $path, $namespace, $interface['directory'] ?? null, $strict);
+    }, array_map(function ($current) use ($namespace, $interfaces) {
+        return mdl_fix_interface_import_paths($namespace, $current, $interfaces);
+    }, $interfaces)) : [];
+
+    $classes = $blueprints ? array_map(function ($class) use ($path, $namespace, $strict, $setters, $getters) {
+        // TODO : Validate the component
+        return mdl_create_component_source(mdl_create_class($class, $setters, $getters), $path, $namespace, $class['directory'] ?? null, $strict);
+    }, $blueprints) : [];
+
+    // Merged the generated components
+    $components = array_merge($mixins, $implementations, $classes);
+
+    printf("\nWriting component, to disk...");
+    foreach ($components as $value) {
+        mdl_write_component_to_disk($value);
+        printf(".");
+    }
+    printf("\n");
+}
+// #region MDL namespace
+
+/**
+ * Main program
+ * 
+ * @param array $args 
+ * @return void 
+ * @throws Error 
+ * @throws RuntimeException 
+ */
+function main(array $args = [])
+{
+    printf("Program: Namespace source code generator\n");
+
+    // #region Load command line arguments and options
+    $arguments = mdl_cmd_arguments($args);
+    $options = mdl_cmd_options($args);
+    // #endregion Load command line arguments and options
+
+    $path = $arguments[0] ?? null;
+    if (null === $path) {
+        throw new Error('Program expect an argument which is the path to the namspace configuration file');
+    }
+    // Resolve the realpath to the path specified by the program user
+    $path = @mdl_resolve_path($path, __DIR__);
+
+    $definition = isset($options['json']) ? @json_decode(file_get_contents($path)) : \yaml_parse(file_get_contents($path));
+
+    // Set the memory limit for the current script execution
+    ini_set('memory_limit', '-1');
+    set_time_limit(0);
+
+    // TODO : Execute the generator process
+    mdl_create_namespace($definition, in_array('strict', $options), in_array('set', $options) || in_array('setters', $options), in_array('get', $options) || in_array('getters',  $options));
+
+    printf("\nProcess completed successfully. Thanks for using our service!\n");
+}
+
+main(array_slice($argv, 1));

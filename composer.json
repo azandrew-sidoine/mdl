@@ -1,0 +1,22 @@
+{
+    "name": "drewlabs/mdl-cli",
+    "description": "PHP script for generating classes, interface, mixin, ect... based on UML model written iin YAML or JSON language",
+    "type": "library",
+    "license": "MIT",
+    "bin": ["./mdl"],
+    "autoload": {
+        "psr-4": {
+            "Drewlabs\\Mdl\\": "src/"
+        }
+    },
+    "authors": [
+        {
+            "name": "azandrew-sidoine",
+            "email": "asmyns.platonnas29@gmail.com"
+        }
+    ],
+    "minimum-stability": "dev",
+    "require": {
+        "drewlabs/code-generator": "dev-master"
+    }
+}

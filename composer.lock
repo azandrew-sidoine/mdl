@@ -1,0 +1,64 @@
+{
+    "_readme": [
+        "This file locks the dependencies of your project to a known state",
+        "Read more about it at https://getcomposer.org/doc/01-basic-usage.md#installing-dependencies",
+        "This file is @generated automatically"
+    ],
+    "content-hash": "0867028001b2d3243678f2d9ee2936c0",
+    "packages": [
+        {
+            "name": "drewlabs/code-generator",
+            "version": "dev-master",
+            "source": {
+                "type": "git",
+                "url": "https://github.com/azandrew-sidoine/drewlabs-php-code-generator.git",
+                "reference": "bc8b149346d3b448b6bd2556b9b5191294290857"
+            },
+            "dist": {
+                "type": "zip",
+                "url": "https://api.github.com/repos/azandrew-sidoine/drewlabs-php-code-generator/zipball/bc8b149346d3b448b6bd2556b9b5191294290857",
+                "reference": "bc8b149346d3b448b6bd2556b9b5191294290857",
+                "shasum": ""
+            },
+            "require": {
+                "php": ">=7.2"
+            },
+            "default-branch": true,
+            "type": "library",
+            "autoload": {
+                "files": [
+                    "./src/proxies.php"
+                ],
+                "psr-4": {
+                    "Drewlabs\\CodeGenerator\\": "src/"
+                }
+            },
+            "notification-url": "https://packagist.org/downloads/",
+            "license": [
+                "MIT"
+            ],
+            "authors": [
+                {
+                    "name": "azandrew-sidoine",
+                    "email": "asmyns.platonnas29@gmail.com"
+                }
+            ],
+            "description": "Simple utility classes for generating PHP classes, methods, properties and interfaces",
+            "support": {
+                "source": "https://github.com/azandrew-sidoine/drewlabs-php-code-generator/tree/v0.2.4"
+            },
+            "time": "2023-03-22T14:02:57+00:00"
+        }
+    ],
+    "packages-dev": [],
+    "aliases": [],
+    "minimum-stability": "dev",
+    "stability-flags": {
+        "drewlabs/code-generator": 20
+    },
+    "prefer-stable": false,
+    "prefer-lowest": false,
+    "platform": [],
+    "platform-dev": [],
+    "plugin-api-version": "2.2.0"
+}
