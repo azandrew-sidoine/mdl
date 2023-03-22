@@ -20,6 +20,6 @@
     "minimum-stability": "dev",
     "prefer-stable": true,
     "require": {
-        "drewlabs/code-generator": "dev-master"
+        "drewlabs/code-generator": "^0.2.4"
     }
 }

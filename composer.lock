@@ -4,11 +4,11 @@
         "Read more about it at https://getcomposer.org/doc/01-basic-usage.md#installing-dependencies",
         "This file is @generated automatically"
     ],
-    "content-hash": "0867028001b2d3243678f2d9ee2936c0",
+    "content-hash": "0bd2ecb6181fd266489af64f5e9fbc13",
     "packages": [
         {
             "name": "drewlabs/code-generator",
-            "version": "dev-master",
+            "version": "v0.2.4",
             "source": {
                 "type": "git",
                 "url": "https://github.com/azandrew-sidoine/drewlabs-php-code-generator.git",
@@ -23,7 +23,6 @@
             "require": {
                 "php": ">=7.2"
             },
-            "default-branch": true,
             "type": "library",
             "autoload": {
                 "files": [
@@ -53,10 +52,8 @@
     "packages-dev": [],
     "aliases": [],
     "minimum-stability": "dev",
-    "stability-flags": {
-        "drewlabs/code-generator": 20
-    },
-    "prefer-stable": false,
+    "stability-flags": [],
+    "prefer-stable": true,
     "prefer-lowest": false,
     "platform": [],
     "platform-dev": [],
