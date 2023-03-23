@@ -241,6 +241,47 @@ function mdl_array_wrap($value)
 }
 
 /**
+ * Create a unique list of values from the source value
+ * 
+ * @param \iterable|array $iterable 
+ * @param string|null $key 
+ * @return \iterable 
+ */
+function mdl_array_unique($iterable, string $key = null)
+{
+    if (null === $key && is_array($iterable)) {
+        return array_unique($iterable);
+    }
+    // # Returns the output
+    return iterator_to_array(mdl_unique_iterable($iterable, $key));
+}
+
+/**
+ * Creates an iterable from duplicated key traversable
+ * 
+ * @param \iterable $iterable 
+ * @param string|null $key 
+ * @return Generator<int, mixed, mixed, void> 
+ */
+function mdl_unique_iterable($iterable, string $key = null)
+{
+    $keys = [];
+    foreach ($iterable as $k => $value) {
+        # code...
+        // Case the searched key does not exist, we simply add it to the output
+        if (!isset($value[$key])) {
+            yield $k => $value;
+            continue;
+        }
+        if (array_key_exists($value[$key], $keys)) {
+            continue;
+        }
+        $keys[$value[$key]] = true;
+        yield $k => $value;
+    }
+}
+
+/**
  * Returns a camel case version of the haystack string
  * 
  * @param string $haystack 
@@ -642,6 +683,70 @@ function mdl_find_namespace_component(array $values, $name)
     }
     return false;
 }
+
+/**
+ * Add directory to component definition if missing
+ * 
+ * @param array $definition 
+ * @param string $directory
+ * 
+ * @return array 
+ */
+function mdl_set_component_directory(array $definition, string $directory)
+{
+    if (!isset($definition['directory'])) {
+        $definition['directory'] = $directory;
+    }
+    return $definition;
+}
+
+function mdl_resolve_interface_methods($iterable, $interface_definitions, &$methods)
+{
+    foreach ($iterable as $value) {
+        if ((substr($value, 0, 1) !== "\\") && (false !== ($match = mdl_find_namespace_component($interface_definitions, $value)))) {
+            if (isset($match['extends'])) {
+                mdl_resolve_interface_methods($match['extends'] ?? [], $interface_definitions, $methods);
+            }
+            $methods = array_merge($methods, $match['methods'] ?? []);
+        }
+    }
+}
+
+/**
+ * Resolve base classes implementations
+ * 
+ * @param string|mixed $extends 
+ * @param array $blueprint_definitions 
+ * @param array $interfaces 
+ * @return void 
+ */
+function mdl_resolve_base_class_implementations($extends, $blueprint_definitions, &$interfaces)
+{
+    $result = mdl_find_namespace_component($blueprint_definitions, $extends);
+    if (isset($result['implements'])) {
+        $interfaces = array_merge($result['implements'] ?? [], $interfaces ?? []);
+    }
+    if (isset($result['extends'])) {
+        mdl_resolve_base_class_implementations($result['extends'], $blueprint_definitions, $interfaces);
+    }
+}
+
+/**
+ * Fixes duplicate members in component definitions
+ * 
+ * @param array $definition 
+ * @return array 
+ */
+function mdl_component_fix_duplicate_members(array $definition)
+{
+    if (isset($definition['methods'])) {
+        $definition['methods'] = mdl_array_unique(mdl_array_wrap($definition['methods']), 'name');
+    }
+    if (isset($definition['properties'])) {
+        $definition['properties'] = mdl_array_unique(mdl_array_wrap($definition['properties']), 'name');
+    }
+    return $definition;
+}
 // #region MDL miscellanous functions
 
 // #region MDL namespace
@@ -657,11 +762,17 @@ function mdl_create_namespace(array $definition, bool $strict = true, bool $sett
     $path = $definition['path'] ?? './src';
     $namespace = preg_replace("/\s+/", "", str_replace("\\\\", "\\", $definition['name'] ?? 'App'));
     // TODO : Add interface method to class if interface is in namespace
-    $blueprint_definitions = $definition['classes'] ?? [];
-    $interfaces = $definition['interfaces'] ?? [];
-    $mixin_definitions = $definition['mixins'] ?? [];
+    $blueprint_definitions = isset($definition['directories']['classes']) ? array_map(function ($class_definition) use ($definition) {
+        return mdl_set_component_directory($class_definition, $definition['directories']['classes']);
+    }, $definition['classes'] ?? []) : $definition['classes'] ?? [];
+    $interface_definitions = isset($definition['directories']['interfaces']) ? array_map(function ($interface) use ($definition) {
+        return mdl_set_component_directory($interface, $definition['directories']['interfaces']);
+    }, $definition['interfaces'] ?? []) : $definition['interfaces'] ?? [];
+    $mixin_definitions = isset($definition['directories']['mixins']) ? array_map(function ($mixins) use ($definition) {
+        return mdl_set_component_directory($mixins, $definition['directories']['mixins']);
+    }, $definition['mixins'] ?? []) : $definition['mixins'] ?? [];
 
-    $blueprints = array_map(function ($blueprint) use ($interfaces, $blueprint_definitions, $mixin_definitions, $namespace) {
+    $blueprint_definitions = array_map(function ($blueprint) use ($interface_definitions, $blueprint_definitions, $mixin_definitions, $namespace) {
         // #region Rewrite extended class path
         $extends = isset($blueprint['extends']) ? (is_array($blueprint['extends']) ? array_values($blueprint['extends'])[0] : $blueprint['extends']) : null;
         // #endregion Rewrite extended class path
@@ -671,57 +782,56 @@ function mdl_create_namespace(array $definition, bool $strict = true, bool $sett
                 $blueprint,
                 $blueprint_definitions,
                 $mixin_definitions,
-                $interfaces,
+                $interface_definitions,
                 $extends
             );
         }
         $methods = [];
         // #region Merge the extended class implementation with the current class implementations
-        $current_implementations = mdl_array_wrap($blueprint['implements'] ?? []);
-        $iterable = $extends && ($extend_definition = mdl_find_namespace_component($blueprint_definitions, $extends)) ? array_merge($extend_definition['implements'] ?? [], $current_implementations) : $current_implementations;
-        // #endregion Merge the extended class implementation with the current class implementations
-        foreach ($iterable as $value) {
-            if (false === strpos($value ?? '', '\\') && (false !== ($match = mdl_find_namespace_component($interfaces, $value)))) {
-                $methods = array_merge($methods, $match['methods'] ?? []);
-            }
+        $iterable = mdl_array_wrap($blueprint['implements'] ?? []);
+        if ($extends) {
+            mdl_resolve_base_class_implementations($extends, $blueprint_definitions, $iterable);
         }
-
+        // #endregion Merge the extended class implementation with the current class implementations
+        mdl_resolve_interface_methods($iterable, $interface_definitions, $methods);
         $blueprint['methods'] = array_merge($blueprint['methods'] ?? [], $methods);
         return mdl_fix_class_import_paths(
             $namespace,
             $blueprint,
             $blueprint_definitions,
             $mixin_definitions,
-            $interfaces,
+            $interface_definitions,
             $extends
-        );;
+        );
     }, $blueprint_definitions);
 
-    $mixins = isset($definition['mixins']) ? array_map(function ($mixin) use ($path, $namespace, $strict) {
+    $mixins = $mixin_definitions ? array_map(function ($mixin) use ($path, $namespace, $strict) {
         // TODO : Validate the component
-        return mdl_create_component_source(mdl_create_mixin($mixin), $path, $namespace, $mixin['directory'] ?? null, $strict);
+        return mdl_create_component_source(mdl_create_mixin(mdl_component_fix_duplicate_members($mixin)), $path, $namespace, $mixin['directory'] ?? null, $strict);
     }, array_map(function ($mixin) use ($namespace, $mixin_definitions) {
         return mdl_fix_trait_import_paths($namespace, $mixin, $mixin_definitions);
     }, $mixin_definitions)) : [];
 
     printf("\nCompiling component, please wait...\n");
 
-    $implementations = $definition['interfaces'] ? array_map(function ($interface) use ($path, $namespace, $strict) {
+    $implementations = $interface_definitions ? array_map(function ($interface) use ($path, $namespace, $strict) {
         // TODO : Validate the component
-        return mdl_create_component_source(mdl_create_interface($interface), $path, $namespace, $interface['directory'] ?? null, $strict);
-    }, array_map(function ($current) use ($namespace, $interfaces) {
-        return mdl_fix_interface_import_paths($namespace, $current, $interfaces);
-    }, $interfaces)) : [];
+        return mdl_create_component_source(mdl_create_interface(mdl_component_fix_duplicate_members($interface)), $path, $namespace, $interface['directory'] ?? null, $strict);
+    }, array_map(function ($current) use ($namespace, $interface_definitions) {
+        return mdl_fix_interface_import_paths($namespace, $current, $interface_definitions);
+    }, $interface_definitions)) : [];
 
-    $classes = $blueprints ? array_map(function ($class) use ($path, $namespace, $strict, $setters, $getters) {
+    $classes = $blueprint_definitions ? array_map(function ($class) use ($path, $namespace, $strict, $setters, $getters) {
         // TODO : Validate the component
-        return mdl_create_component_source(mdl_create_class($class, $setters, $getters), $path, $namespace, $class['directory'] ?? null, $strict);
-    }, $blueprints) : [];
+        return mdl_create_component_source(mdl_create_class(mdl_component_fix_duplicate_members($class), $setters, $getters), $path, $namespace, $class['directory'] ?? null, $strict);
+    }, $blueprint_definitions) : [];
 
     // Merged the generated components
     $components = array_merge($mixins, $implementations, $classes);
 
     printf("\nWriting component, to disk...");
+
+    // # Write compiled component to disk
     foreach ($components as $value) {
         mdl_write_component_to_disk($value);
         printf(".");

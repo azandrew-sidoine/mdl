@@ -20,6 +20,8 @@
     "minimum-stability": "dev",
     "prefer-stable": true,
     "require": {
-        "drewlabs/code-generator": "^0.2.4"
+        "php": ">=7.2",
+        "drewlabs/code-generator": "^0.2.4",
+        "ext-yaml": "*"
     }
 }
