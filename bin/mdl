@@ -327,7 +327,8 @@ function mdl_create_property(array $definition)
     $property = PHPClassProperty(
         preg_replace("/\s+/", "", $definition['name']),
         isset($definition['type']) ? str_replace("\\\\", "\\", $definition['type']) : null,
-        $definition['modifier'] ?? 'public',
+        // Class property as defined as private by default
+        $definition['modifier'] ?? 'private',
         $definition['default'] ?? null,
         $definition['comment'] ?? null
     );
