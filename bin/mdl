@@ -20,7 +20,7 @@ use Drewlabs\CodeGenerator\Models\PHPClassMethod as ClassMethod;
 // #region Defaults
 const MDL_DEFAULT_HEADER = <<<EOT
 /*
- * This file is auto generated using the drewlabs code generator package (v2.4)
+ * This file is auto generated using the drewlabs/mdl UML model class generator package
  *
  * (c) Sidoine Azandrew <contact@liksoft.tg>
  *
@@ -341,6 +341,9 @@ function mdl_create_property(array $definition)
 function mdl_create_method(array $definition)
 {
     // TODO: Validate method definition and throw if required
+    /**
+     * @var ClassMethod
+     */
     $method = PHPClassMethod(preg_replace("/\s+/", "", $definition['name']), [], isset($definition['returns']) ? str_replace("\\\\", "\\", $definition['returns']) : null, $definition['modifier'] ?? 'public', $definition['comment'] ?? null);
     if (isset($definition['throws'])) {
         /**
@@ -353,7 +356,6 @@ function mdl_create_method(array $definition)
 
     if (isset($definition['parameters'])) {
         foreach (mdl_array_wrap($definition['parameters']) as $value) {
-            # code...
             /**
              * @var ClassMethod
              */
@@ -361,7 +363,15 @@ function mdl_create_method(array $definition)
         }
     }
     if (isset($definition['static']) && (true === boolval($definition['static']))) {
+        /**
+         * @var ClassMethod $method
+         */
         $method = $method->asStatic(true);
+    }
+    if (isset($definition['lines']) && ($lines = mdl_array_wrap($definition['lines']))) {
+        foreach ($lines as $line) {
+            $method = $method->addLine($line);
+        }
     }
     return $method;
 }
@@ -447,6 +457,65 @@ function mdl_create_property_getter(ValueContainer $property, string $type = nul
 }
 
 /**
+ * Creates a class constructor instance
+ * 
+ * @param ValueContainer[] $properties 
+ * @return CallableInterface 
+ */
+function mdl_create_class_constructor(array $properties)
+{
+    $required_parameters = array_map(function ($item) {
+        return mdl_create_function_parameter([
+            'name' => $item['name'],
+            'type' => $item['type'] ?? null,
+            'optional' => false
+        ]);
+    }, array_filter($properties, function ($item) {
+        return !isset($item['optional']) || (isset($item['optional']) && boolval($item['optional']) === false);
+    }));
+    $optional_parameters = array_map(function ($item) {
+        return mdl_create_function_parameter([
+            'name' => $item['name'],
+            'type' => $item['type'] ?? null,
+            'optional' => true,
+            'default' => $item['default'] ?? null
+        ]);
+    }, array_filter($properties, function ($item) {
+        return isset($item['optional']) && boolval($item['optional']) === true;
+    }));
+    $constructor_parameters = [...$required_parameters, ...$optional_parameters];
+    $constructor =  PHPClassMethod(
+        '__construct',
+        $constructor_parameters,
+        null,
+        'public',
+        'Create new class instance'
+    );
+    foreach ($constructor_parameters as $parameter) {
+        $constructor = $constructor->addLine("\$this->" . $parameter->name() . ' = ' . "\$" . $parameter->name());
+    }
+    return $constructor;
+}
+
+/**
+ * Check if class definition provides a custom constructor definition
+ * @param array $methods 
+ * @return bool 
+ */
+function mdl_has_constructor_method(array $methods)
+{
+    foreach ($methods as $value) {
+        if (!is_array($value)) {
+            continue;
+        }
+        if (isset($value['name']) && (strtolower(strval($value['name'])) === '__construct')) {
+            return true;
+        }
+    }
+    return false;
+}
+
+/**
  * Creates a class definition object
  * 
  * @param array $definition 
@@ -457,6 +526,8 @@ function mdl_create_class(array $definition, bool $set, bool $get)
     // TODO: Add validation and throw if required
     $setters = [];
     $getters = [];
+    $properties = mdl_array_wrap($definition['properties'] ?? []);
+    $methods = mdl_array_wrap($definition['methods'] ?? []);
     /**
      * @var BluePrint
      */
@@ -465,7 +536,7 @@ function mdl_create_class(array $definition, bool $set, bool $get)
         mdl_array_wrap($definition['implements'] ?? []),
         array_map(function ($item) {
             return mdl_create_method($item);
-        }, mdl_array_wrap($definition['methods'] ?? [])),
+        }, $methods),
         array_map(function ($item) use (&$getters, &$setters, $set, $get) {
             $property = mdl_create_property($item);
             // # Create setters if required
@@ -477,7 +548,7 @@ function mdl_create_class(array $definition, bool $set, bool $get)
                 $getters[] = mdl_create_property_getter($property, $item['type'] ?? null);
             }
             return $property;
-        }, mdl_array_wrap($definition['properties'] ?? []))
+        },  $properties)
     );
 
     foreach (array_merge($setters, $getters) as $value) {
@@ -500,12 +571,17 @@ function mdl_create_class(array $definition, bool $set, bool $get)
         $blueprint = $blueprint->setBaseClass($definition['extends']);
     }
 
-    if (isset($definition['abstract'])) {
+    if (isset($definition['abstract']) && (boolval($definition['abstract']) === true)) {
         $blueprint = $blueprint->asAbstract();
     }
 
     if (isset($definition['final'])) {
         $blueprint = $blueprint->asFinal();
+    }
+
+    // TODO : Add constructor
+    if (isset($definition['constructor']) && (boolval($definition['constructor']) === true) && !mdl_has_constructor_method($methods)) {
+        $blueprint = $blueprint->addMethod(mdl_create_class_constructor($properties));
     }
     return $blueprint;
 }
@@ -562,6 +638,7 @@ function mdl_compile_source_code(string $source, bool $strict = true, string $he
     // Add strict type definition if required
     if ($strict) {
         $parts[] = 'declare(strict_types=1);';
+        $parts[] = '';
     }
     // Add File headers
     $parts[] = null !== $headers ? implode(\PHP_EOL, mdl_array_wrap($headers)) : MDL_DEFAULT_HEADER;
@@ -604,7 +681,7 @@ function mdl_fix_class_import_paths(string $namespace, array $blueprint, array $
             $result = mdl_find_namespace_component($interfaces, $implement);
             $implement = (false !== $result) && isset($result['directory']) ? (mdl_create_sub_namespace($namespace, $result['directory']) . "\\" . $result['name']) : (false === strpos($implement, "\\") ? $namespace . "\\" . $implement : $implement);
             return str_replace("\\\\", "\\", $implement);
-        }, $blueprint['implements'] ?? []);
+        }, mdl_array_wrap($blueprint['implements'] ?? []));
     }
     // #endregion Fix namespace for interfaces
 
@@ -614,7 +691,7 @@ function mdl_fix_class_import_paths(string $namespace, array $blueprint, array $
             $result = mdl_find_namespace_component($mixins, $mixin);
             $mixin = (false !== $result) && isset($result['directory']) ? (mdl_create_sub_namespace($namespace, $result['directory']) . "\\" . $result['name']) : (false === strpos($mixin, "\\") ? $namespace . "\\" . $mixin : $mixin);
             return str_replace("\\\\", "\\", $mixin);
-        }, $blueprint['mixins'] ?? []);
+        }, mdl_array_wrap($blueprint['mixins'] ?? []));
     }
     // #endregion Fix namespace for mixins
 
@@ -709,7 +786,7 @@ function mdl_resolve_interface_methods($iterable, array $interface_definitions, 
                 mdl_resolve_interface_methods($match['extends'] ?? [], $interface_definitions, $excludes, $methods);
             }
             // #region Filter out method that already are defined in mixin classes
-            $actual_methods = array_filter($match['methods'] ?? [], function($current) use ($excludes) {
+            $actual_methods = array_filter($match['methods'] ?? [], function ($current) use ($excludes) {
                 return is_array($current) && isset($current['name']) && !in_array($current['name'], $excludes);
             });
             // #endregion Filter out method that already are defined in mixin classes
@@ -796,13 +873,13 @@ function mdl_create_namespace(array $definition, bool $strict = true, bool $sett
     // TODO : Add interface method to class if interface is in namespace
     $blueprint_definitions = isset($definition['directories']['classes']) ? array_map(function ($class_definition) use ($definition) {
         return mdl_set_component_directory($class_definition, $definition['directories']['classes']);
-    }, $definition['classes'] ?? []) : $definition['classes'] ?? [];
+    }, mdl_array_wrap($definition['classes'] ?? [])) : mdl_array_wrap($definition['classes'] ?? []);
     $interface_definitions = isset($definition['directories']['interfaces']) ? array_map(function ($interface) use ($definition) {
         return mdl_set_component_directory($interface, $definition['directories']['interfaces']);
-    }, $definition['interfaces'] ?? []) : $definition['interfaces'] ?? [];
+    }, mdl_array_wrap($definition['interfaces'] ?? [])) : mdl_array_wrap($definition['interfaces'] ?? []);
     $mixin_definitions = isset($definition['directories']['mixins']) ? array_map(function ($mixins) use ($definition) {
         return mdl_set_component_directory($mixins, $definition['directories']['mixins']);
-    }, $definition['mixins'] ?? []) : $definition['mixins'] ?? [];
+    }, mdl_array_wrap($definition['mixins'] ?? [])) : mdl_array_wrap($definition['mixins'] ?? []);
 
     $blueprint_definitions = array_map(function ($blueprint) use ($interface_definitions, $blueprint_definitions, $mixin_definitions, $namespace) {
         // #region Rewrite extended class path
