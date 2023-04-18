@@ -245,7 +245,7 @@ function mdl_array_wrap($value)
  * 
  * @param \iterable|array $iterable 
  * @param string|null $key 
- * @return \iterable 
+ * @return array 
  */
 function mdl_array_unique($iterable, string $key = null)
 {
@@ -377,25 +377,48 @@ function mdl_create_method(array $definition)
 }
 
 /**
+ * Creates a PHP trait or mixin instance
  * 
  * @param array $definition 
+ * @param bool $set 
+ * @param bool $get 
  * @return TraitableStruct 
  */
-function mdl_create_mixin(array $definition)
+function mdl_create_mixin(array $definition, bool $set, bool $get)
 {
     // TODO : Validate and throw if required
+    $set = isset($definition['setter']) ? boolval($definition['setter']) : $set;
+    $get = isset($definition['getter']) ? boolval($definition['getter']) : $get;
+    $setters = [];
+    $getters = [];
+    $properties = mdl_array_wrap($definition['properties'] ?? []);
+    $methods = mdl_array_wrap($definition['methods'] ?? []);
     $mixin = PHPTrait(
         preg_replace("/\s+/", "", $definition['name']),
         array_map(function ($item) {
             return mdl_create_method($item);
-        }, mdl_array_wrap($definition['methods'] ?? [])),
-        array_map(function ($item) {
-            return mdl_create_property($item);
-        }, mdl_array_wrap($definition['properties'] ?? []))
+        }, $methods),
+        array_map(function ($item)  use (&$getters, &$setters, $set, $get)  {
+            $property = mdl_create_property($item);
+            // # Create setters if required
+            if ($set && (false === boolval($item['readonly'] ?? false))) {
+                $setters[] = mdl_create_property_setter($property, $item['type'] ?? null);
+            }
+            // # Create getters if required
+            if ($get) {
+                $getters[] = mdl_create_property_getter($property, $item['type'] ?? null);
+            }
+            return $property;
+        }, $properties)
     );
+    foreach (array_merge($setters, $getters) as $value) {
+        /**
+         * @var TraitableStruct
+         */
+        $mixin = $mixin->addMethod($value);
+    }
     if (isset($definition['mixins'])) {
         foreach (mdl_array_wrap($definition['mixins']) as $value) {
-            # code...
             $mixin = $mixin->addTrait($value);
         }
     }
@@ -519,11 +542,15 @@ function mdl_has_constructor_method(array $methods)
  * Creates a class definition object
  * 
  * @param array $definition 
+ * @param bool $set 
+ * @param bool $get 
  * @return Blueprint 
  */
 function mdl_create_class(array $definition, bool $set, bool $get)
 {
     // TODO: Add validation and throw if required
+    $set = isset($definition['setter']) ? boolval($definition['setter']) : $set;
+    $get = isset($definition['getter']) ? boolval($definition['getter']) : $get;
     $setters = [];
     $getters = [];
     $properties = mdl_array_wrap($definition['properties'] ?? []);
@@ -581,7 +608,7 @@ function mdl_create_class(array $definition, bool $set, bool $get)
 
     // TODO : Add constructor
     if (isset($definition['constructor']) && (boolval($definition['constructor']) === true) && !mdl_has_constructor_method($methods)) {
-        $blueprint = $blueprint->addMethod(mdl_create_class_constructor($properties));
+        $blueprint = $blueprint->addMethod(mdl_create_class_constructor(mdl_array_unique(array_merge($properties, $definition['mixin_properties'] ?? []), 'name')));
     }
     return $blueprint;
 }
@@ -856,6 +883,31 @@ function mdl_find_mixing_methods($mixin, $mixin_definitions, &$methods)
         return is_array($item) && isset($item['name']);
     })));
 }
+
+/**
+ * Find mixin properties
+ * 
+ * @param mixed $mixin 
+ * @param mixed $mixin_definitions 
+ * @param mixed $properties 
+ * @return void 
+ */
+function mdl_find_mixing_properties($mixin, $mixin_definitions, &$properties)
+{
+    $result = mdl_find_namespace_component($mixin_definitions, $mixin);
+    if (isset($result['mixins'])) {
+        foreach (mdl_array_wrap($result['mixins']) as $value) {
+            if (!is_string($value)) {
+                continue;
+            }
+            mdl_find_mixing_properties($value, $mixin_definitions, $properties);
+        }
+    }
+    $filter = array_filter(mdl_array_wrap($result['properties'] ?? []), function ($item) {
+        return is_array($item) && isset($item['name']);
+    });
+    $properties = array_merge($properties ?? [], $filter);
+}
 // #region MDL miscellanous functions
 
 // #region MDL namespace
@@ -880,7 +932,6 @@ function mdl_create_namespace(array $definition, bool $strict = true, bool $sett
     $mixin_definitions = isset($definition['directories']['mixins']) ? array_map(function ($mixins) use ($definition) {
         return mdl_set_component_directory($mixins, $definition['directories']['mixins']);
     }, mdl_array_wrap($definition['mixins'] ?? [])) : mdl_array_wrap($definition['mixins'] ?? []);
-
     $blueprint_definitions = array_map(function ($blueprint) use ($interface_definitions, $blueprint_definitions, $mixin_definitions, $namespace) {
         // #region Rewrite extended class path
         $extends = isset($blueprint['extends']) ? (is_array($blueprint['extends']) ? array_values($blueprint['extends'])[0] : $blueprint['extends']) : null;
@@ -897,6 +948,7 @@ function mdl_create_namespace(array $definition, bool $strict = true, bool $sett
         }
         $methods = [];
         $mixin_methods = [];
+        $mixin_properties = [];
         // #region Find mixin methods that might be excluded from class inherited method definitions
         if (isset($blueprint['mixins'])) {
             foreach ($blueprint['mixins'] as $mixin_name) {
@@ -904,6 +956,7 @@ function mdl_create_namespace(array $definition, bool $strict = true, bool $sett
                     continue;
                 }
                 mdl_find_mixing_methods($mixin_name, $mixin_definitions, $mixin_methods);
+                mdl_find_mixing_properties($mixin_name, $mixin_definitions, $mixin_properties);
             }
         }
         // #endregion Find mixin methods that might be excluded from class inherited method definitions
@@ -916,6 +969,7 @@ function mdl_create_namespace(array $definition, bool $strict = true, bool $sett
         // #endregion Merge the extended class implementation with the current class implementations
         mdl_resolve_interface_methods($iterable, $interface_definitions, $mixin_methods, $methods);
         $blueprint['methods'] = array_merge($blueprint['methods'] ?? [], $methods);
+        $blueprint['mixin_properties'] = $mixin_properties;
         return mdl_fix_class_import_paths(
             $namespace,
             $blueprint,
@@ -926,9 +980,15 @@ function mdl_create_namespace(array $definition, bool $strict = true, bool $sett
         );
     }, $blueprint_definitions);
 
-    $mixins = $mixin_definitions ? array_map(function ($mixin) use ($path, $namespace, $strict) {
+    $mixins = $mixin_definitions ? array_map(function ($mixin) use ($path, $namespace, $strict, $setters, $getters) {
         // TODO : Validate the component
-        return mdl_create_component_source(mdl_create_mixin(mdl_component_fix_duplicate_members($mixin)), $path, $namespace, $mixin['directory'] ?? null, $strict);
+        return mdl_create_component_source(
+            mdl_create_mixin(mdl_component_fix_duplicate_members($mixin), $setters, $getters),
+            $path,
+            $namespace,
+            $mixin['directory'] ?? null,
+            $strict
+        );
     }, array_map(function ($mixin) use ($namespace, $mixin_definitions) {
         return mdl_fix_trait_import_paths($namespace, $mixin, $mixin_definitions);
     }, $mixin_definitions)) : [];
@@ -937,14 +997,28 @@ function mdl_create_namespace(array $definition, bool $strict = true, bool $sett
 
     $implementations = $interface_definitions ? array_map(function ($interface) use ($path, $namespace, $strict) {
         // TODO : Validate the component
-        return mdl_create_component_source(mdl_create_interface(mdl_component_fix_duplicate_members($interface)), $path, $namespace, $interface['directory'] ?? null, $strict);
+        return mdl_create_component_source(
+            mdl_create_interface(
+                mdl_component_fix_duplicate_members($interface)
+            ),
+            $path,
+            $namespace,
+            $interface['directory'] ?? null,
+            $strict
+        );
     }, array_map(function ($current) use ($namespace, $interface_definitions) {
         return mdl_fix_interface_import_paths($namespace, $current, $interface_definitions);
     }, $interface_definitions)) : [];
 
     $classes = $blueprint_definitions ? array_map(function ($class) use ($path, $namespace, $strict, $setters, $getters) {
         // TODO : Validate the component
-        return mdl_create_component_source(mdl_create_class(mdl_component_fix_duplicate_members($class), $setters, $getters), $path, $namespace, $class['directory'] ?? null, $strict);
+        return mdl_create_component_source(
+            mdl_create_class(mdl_component_fix_duplicate_members($class), $setters, $getters),
+            $path,
+            $namespace,
+            $class['directory'] ?? null,
+            $strict
+        );
     }, $blueprint_definitions) : [];
 
     // Merged the generated components
