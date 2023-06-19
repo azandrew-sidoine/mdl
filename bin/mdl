@@ -115,7 +115,6 @@ function mdl_create_directory_if_not_exists(string $dirname)
 {
     // Create the path directory if not exists
     if (!is_dir($dirname)) {
-        print_r([$dirname]);
         mkdir($dirname, 0777, true);
     }
 }
