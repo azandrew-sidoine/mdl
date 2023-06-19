@@ -115,6 +115,7 @@ function mdl_create_directory_if_not_exists(string $dirname)
 {
     // Create the path directory if not exists
     if (!is_dir($dirname)) {
+        print_r([$dirname]);
         mkdir($dirname, 0777, true);
     }
 }
@@ -393,16 +394,18 @@ function mdl_create_mixin(array $definition, bool $set, bool $get)
     $getters = [];
     $properties = mdl_array_wrap($definition['properties'] ?? []);
     $methods = mdl_array_wrap($definition['methods'] ?? []);
+    $immutable = boolval($definition['immutable'] ?? false);
+
     $mixin = PHPTrait(
         preg_replace("/\s+/", "", $definition['name']),
         array_map(function ($item) {
             return mdl_create_method($item);
         }, $methods),
-        array_map(function ($item)  use (&$getters, &$setters, $set, $get)  {
+        array_map(function ($item)  use (&$getters, &$setters, $set, $get, $immutable)  {
             $property = mdl_create_property($item);
             // # Create setters if required
             if ($set && (false === boolval($item['readonly'] ?? false))) {
-                $setters[] = mdl_create_property_setter($property, $item['type'] ?? null);
+                $setters[] = mdl_create_property_setter($property, $item['type'] ?? null, $immutable);
             }
             // # Create getters if required
             if ($get) {
@@ -455,13 +458,11 @@ function mdl_create_interface(array $definition)
  * @param string|null $type 
  * @return CallableInterface 
  */
-function mdl_create_property_setter(ValueContainer $property, string $type = null)
+function mdl_create_property_setter(ValueContainer $property, string $type = null, bool $immutable = false)
 {
-    $methodName = 'set' . mdl_str_camelize($name = $property->getName());
     $type = str_replace("\\\\", "\\", $type);
-    $method = PHPClassMethod($methodName, [PHPFunctionParameter('value', $type)], 'self', 'public', "Set $name property value");
-    $method = $method->addLine("\$this->" . $name . " = \$value")->addLine('')->addLine("return \$this");
-    return $method;
+    $method = PHPClassMethod('set' . mdl_str_camelize($name = $property->getName()), [PHPFunctionParameter('value', $type)], 'self', 'public', "Set $name property value");
+    return $immutable ? $method->addLine("\$self = clone \$this")->addLine("\$self->" . $name . " = \$value")->addLine("return \$self"): $method->addLine("\$this->" . $name . " = \$value")->addLine("return \$this");
 }
 
 /**
@@ -474,9 +475,7 @@ function mdl_create_property_setter(ValueContainer $property, string $type = nul
 function mdl_create_property_getter(ValueContainer $property, string $type = null)
 {
     $type = str_replace("\\\\", "\\", $type);
-    $methodName = 'get' . mdl_str_camelize($name = $property->getName());
-    $method = PHPClassMethod($methodName, [], $type, 'public', "Get $name property value");
-    return $method->addLine("return \$this->" . $name);
+    return PHPClassMethod('get' . mdl_str_camelize($name = $property->getName()), [], $type, 'public', "Get $name property value")->addLine("return \$this->" . $name);
 }
 
 /**
@@ -555,6 +554,7 @@ function mdl_create_class(array $definition, bool $set, bool $get)
     $getters = [];
     $properties = mdl_array_wrap($definition['properties'] ?? []);
     $methods = mdl_array_wrap($definition['methods'] ?? []);
+    $immutable = boolval($definition['immutable'] ?? false);
     /**
      * @var BluePrint
      */
@@ -564,11 +564,11 @@ function mdl_create_class(array $definition, bool $set, bool $get)
         array_map(function ($item) {
             return mdl_create_method($item);
         }, $methods),
-        array_map(function ($item) use (&$getters, &$setters, $set, $get) {
+        array_map(function ($item) use (&$getters, &$setters, $set, $get, $immutable) {
             $property = mdl_create_property($item);
             // # Create setters if required
             if ($set && (false === boolval($item['readonly'] ?? false))) {
-                $setters[] = mdl_create_property_setter($property, $item['type'] ?? null);
+                $setters[] = mdl_create_property_setter($property, $item['type'] ?? null, $immutable);
             }
             // # Create getters if required
             if ($get) {
