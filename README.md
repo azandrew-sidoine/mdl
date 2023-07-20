@@ -112,4 +112,37 @@ The design language consist of two main parts:
   - `mixins`: which is not part of UML definition language but help in implementing the `DRY` recommandation when developping software application. Basically, they consist of PHP traits components and are generated under the directory specify for `mixins` in the metada configuration.
   - `interfaces`: which contains the list of `interfaces/contracts` that might be implemented in the given project.
 
-    **Note** The documentation is still under development and might change as API changes occur.
+## The MDL CLI
+
+Once the definition language is written, we make use of the `mdl-cli` tool to generate the our project source code. The syntax for generating source code from `language defintion` file is:
+
+> <PATH_TO_BINARY_DIR>/mdl <PATH_TO_LANGUAGE_DEFINITION_DIRECTORY>/name.yml
+
+For composer based project and assuming the language definition file is at the root of the project:
+
+> ./vendor/bin/mdl $(pwd)/mdl.yml
+
+### Command options
+
+The `mdl-cli` command support options that allows developpers to change the behaviour of the command line client.
+
+- settters
+
+Setters are configured at class level in the configuration file. But to tell the `cli` tool to generate setters for all classes properties, we use the `--set` or `--setters` command line option.
+
+> ./vendor/bin/mdl $(pwd)/mdl.yml --set
+
+- getters
+
+As with `setters`, `getters` are normally configured at class definition level. But we can also tell the `cli` tool to generate getter class for all classes in the generated code using `--get` or `getters` flag.
+
+> ./vendor/bin/mdl $(pwd)/mdl.yml --get
+
+- strict rule
+
+PHP behave differently whenever the `declare_strict(...)` is added to a script file. By default, `cli` does not add this directive to the generated scripts. To tells the `cli` tool to add the required directive we use `--strict` flag in command line:
+
+> ./vendor/bin/mdl $(pwd)/mdl.yml --get --strict
+
+
+**Note** The documentation is still under development and might change as API changes occur.
